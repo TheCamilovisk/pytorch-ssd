@@ -103,7 +103,7 @@ class DetectionDistanceRestriction(Restriction):
 
             mean_heigth = (heigth + last_heigth) / 2
             length = np.linalg.norm(center - last_center) / mean_heigth
-            length_class = self._classify_length(length, mean_heigth)
+            length_class = self._classify_length(length)
 
             last_center = center
             last_heigth = heigth
@@ -117,7 +117,7 @@ class DetectionDistanceRestriction(Restriction):
 
         return mask
 
-    def _classify_length(self, length, mean_heigth):
+    def _classify_length(self, length):
         if self.intrawagon_range[0] <= length <= self.intrawagon_range[1]:
             return 0
         elif self.interwagon_range[0] <= length <= self.interwagon_range[1]:
