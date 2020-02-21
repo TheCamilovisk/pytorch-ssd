@@ -34,7 +34,7 @@ class WagonDetector:
         self.top_k = top_k
         self.prob_threshold = prob_threshold
 
-        self.timer = Timer()
+        # self.timer = Timer()
 
     def _create_network(self, net_type):
         if net_type == 'vgg16-ssd':
@@ -71,11 +71,11 @@ class WagonDetector:
     def __call__(self, image):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        self.timer.start()
+        # self.timer.start()
         boxes, labels, probs = self.predictor.predict(
             image, self.top_k, self.prob_threshold
         )
-        interval = self.timer.end()
-        print('Time: {:.2f}s, Detect Objects: {:d}.'.format(interval, labels.size(0)))
+        # interval = self.timer.end()
+        # print('Time: {:.2f}s, Detect Objects: {:d}.'.format(interval, labels.size(0)))
 
         return boxes, labels, probs
