@@ -1,6 +1,8 @@
+import logging
 import os
 import sys
 import xml.etree.ElementTree as ET
+from glob import iglob
 from argparse import ArgumentParser
 
 import cv2
@@ -23,37 +25,68 @@ from wagon_tracking.tracking import (
 from wagon_tracking.videostream import VideoFileStream
 
 parser = ArgumentParser()
-
 parser.add_argument(
-    '-i', '--input', type=str, required=True, help='The input testing video'
-)
-parser.add_argument(
-    '-o', '--output', type=str, required=True, help="Ther path of the csv's folder"
-)
-parser.add_argument(
-    '-a',
-    '--annotations',
+    '-if',
+    '--input-folder',
     type=str,
     required=True,
-    help='The folder where the reference annotations are',
+    help='The folder path where all the test videos are located.',
 )
-
+parser.add_argument(
+    '-af',
+    '--annotations-folder',
+    type=str,
+    required=True,
+    help='The folder path where all the annotations of the test video are located',
+)
+parser.add_argument(
+    '-of',
+    '--output-folder',
+    type=str,
+    required=True,
+    help='The folder where the resulting csvs will be stored.',
+)
+parser.add_argument(
+    '-v',
+    '--visual',
+    action='store_true',
+    help='Enables the visual feedback of the tracking.',
+)
 args = parser.parse_args()
 
-annotations = args.annotations
-if not os.path.exists(annotations):
-    print('Invalid annotations folder!')
-    sys.exit(-1)
+input_folder = args.input_folder
+assert os.path.isdir(input_folder)
 
-if not os.path.isdir(args.output):
-    os.makedirs(args.output)
+
+annotations_folder = args.annotations_folder
+assert os.path.isdir(annotations_folder)
+
+
+output_folder = args.output_folder
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
+else:
+    assert os.path.isdir(output_folder)
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+)
+
+logging.info(f'Input folder: {input_folder}')
+logging.info(f'Annotations folder: {annotations_folder}')
+logging.info(f'Output folder: {output_folder}')
+
 
 class_names = ('BACKGROUND', 'drain')
 class_dict = {class_name: i for i, class_name in enumerate(class_names)}
 
+logging.info(f'Classes: {class_names}')
 
-def get_annotation(image_id):
-    annotation_file = os.path.join(annotations, f"{image_id}.xml")
+
+def get_annotation(image_id, video_name):
+    annotation_file = os.path.join(annotations_folder, video_name, f"{image_id}.xml")
     objects = ET.parse(annotation_file).findall("object")
     boxes = []
     labels = []
@@ -82,24 +115,14 @@ def get_annotation(image_id):
     )
 
 
-cap = VideoFileStream(args.input, queue_sz=64, transforms=[])
-cap.start()
-
-video_fps = int(cap.get(cv2.CAP_PROP_FPS))
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-frame_time = int(1 / cap.get(cv2.CAP_PROP_FPS) * 1e3)
-
 roi_restriction = ROIRestriction((302, 273, 1579, 796))
-
-video_name = os.path.basename(args.input).replace('.', '_')
 
 timer = Timer()
 
-# Detector
+net_model = 'models/mobilenet_v6.pth'
+logging.info(f'Net model from: {net_model}')
 detector = WagonDetector(
-    'mb1-ssd', 'resources/labels.txt', 'models/mobilenet_v6.pth', prob_threshold=0.4,
+    'mb1-ssd', 'resources/labels.txt', net_model, prob_threshold=0.4,
 )
 
 
@@ -117,7 +140,7 @@ def create_proposed():
         detector,
         frame_width // 2,
         restrictions=restrictions,
-        video_fps=cap.get(cv2.CAP_PROP_FPS),
+        video_fps=10.0,
         target_fps=30.0,
     )
     return tracker
@@ -132,6 +155,7 @@ def create_system2():
 
 
 trackers_func = [create_system1, create_system2, create_proposed]
+techniques_names = ['system1', 'system2', 'proposed']
 
 
 def compare_boxes(gt_boxes, pred_boxes):
@@ -162,88 +186,155 @@ def compare_boxes(gt_boxes, pred_boxes):
     return detections_hits, detections_ious, false_negatives, false_positives
 
 
-techniques_names = ['system1', 'system2', 'proposed']
-
 stats = {}
 
-cv2.namedWindow('annotated', cv2.WINDOW_NORMAL)
+extensions = ['avi', 'mkv']
 
-for tracker_f, technique in zip(trackers_func, techniques_names):
-    tracker = tracker_f()
+quit = False
 
-    cap = VideoFileStream(args.input, queue_sz=64, transforms=[])
+logging.info(f'Visual feedback enabled: {args.visual}')
+
+if args.visual:
+    cv2.namedWindow('annotated', cv2.WINDOW_NORMAL)
+
+for path in iglob(os.path.join(input_folder, '*')):
+    if (
+        not os.path.isfile(path)
+        or os.path.splitext(path)[1][1:].lower() not in extensions
+    ):
+        continue
+
+    logging.info(f'Processing video: {path}')
+
+    video_name = os.path.basename(path).replace('.', '_')
+
+    cap = VideoFileStream(path, queue_sz=64, transforms=[])
     cap.start()
 
-    n_gt_elements_per_frame = []
-    n_detections_per_frame = []
-    n_false_positives_per_frame = []
-    n_false_negatives_per_frame = []
-    all_mean_ious_per_frame = []
+    video_fps = int(cap.get(cv2.CAP_PROP_FPS))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    frame_count = 0
-    while cap.more():
-        timer.start()
-        orig_image = cap.read()
-        if orig_image is None:
-            continue
+    frame_time = int(1 / cap.get(cv2.CAP_PROP_FPS) * 1e3)
 
-        image_id = video_name + f'_{frame_count}'
-        gt_boxes, _, _ = get_annotation(image_id)
+    for tracker_f, technique in zip(trackers_func, techniques_names):
+        tracker = tracker_f()
+        logging.info(f'Technique pass: {technique}')
 
-        n_gt_elements_per_frame.append(len(gt_boxes))
+        cap = VideoFileStream(path, queue_sz=64, transforms=[])
+        cap.start()
 
-        pred_boxes = np.array([box for box, _ in tracker(orig_image).values()]).astype(
-            np.int
-        )
-        pred_boxes, _ = roi_restriction(pred_boxes)
+        n_gt_elements_per_frame = []
+        n_detections_per_frame = []
+        n_false_positives_per_frame = []
+        n_false_negatives_per_frame = []
+        all_mean_ious_per_frame = []
 
-        (
-            detections_hits,
-            detections_ious,
-            false_negatives,
-            false_positives,
-        ) = compare_boxes(gt_boxes, pred_boxes)
+        frame_count = 0
+        while cap.more():
+            timer.start()
+            orig_image = cap.read()
+            if orig_image is None:
+                continue
 
-        n_detections_per_frame.append(len(detections_hits))
-        n_false_positives_per_frame.append(len(false_positives))
-        n_false_negatives_per_frame.append(len(false_negatives))
-        all_mean_ious_per_frame.append(np.mean(detections_ious))
+            image_id = video_name + f'_{frame_count}'
+            gt_boxes, _, _ = get_annotation(image_id, video_name)
 
-        for idx, box in enumerate(gt_boxes):
-            if idx in false_negatives:
-                color = (0, 0, 255)
-            else:
-                color = (255, 255, 0)
-            cv2.rectangle(orig_image, (box[0], box[1]), (box[2], box[3]), color, 4)
+            n_gt_elements_per_frame.append(len(gt_boxes))
 
-        for idx, box in enumerate(pred_boxes):
-            if idx in false_positives:
-                color = (0, 255, 255)
-            else:
-                color = (0, 255, 0)
-            cv2.rectangle(orig_image, (box[0], box[1]), (box[2], box[3]), color, 4)
+            pred_boxes = np.array(
+                [box for box, _ in tracker(orig_image).values()]
+            ).astype(np.int)
+            pred_boxes, _ = roi_restriction(pred_boxes)
 
-        cv2.imshow('annotated', orig_image)
+            (
+                detections_hits,
+                detections_ious,
+                false_negatives,
+                false_positives,
+            ) = compare_boxes(gt_boxes, pred_boxes)
 
-        end_time = timer.end()
-        wait_time = int(np.clip(frame_time - end_time, 1, frame_time))
-        k = cv2.waitKey(wait_time) & 0xFF
-        if k == ord('q') or k == 27:
+            n_detections_per_frame.append(len(detections_hits))
+            n_false_positives_per_frame.append(len(false_positives))
+            n_false_negatives_per_frame.append(len(false_negatives))
+            all_mean_ious_per_frame.append(np.mean(detections_ious))
+
+            if args.visual:
+                for idx, box in enumerate(gt_boxes):
+                    if idx in false_negatives:
+                        color = (0, 0, 255)
+                    else:
+                        color = (255, 255, 0)
+                    cv2.rectangle(
+                        orig_image, (box[0], box[1]), (box[2], box[3]), color, 4
+                    )
+
+                for idx, box in enumerate(pred_boxes):
+                    if idx in false_positives:
+                        color = (0, 255, 255)
+                    else:
+                        color = (0, 255, 0)
+                    cv2.rectangle(
+                        orig_image, (box[0], box[1]), (box[2], box[3]), color, 4
+                    )
+
+                cv2.imshow('annotated', orig_image)
+
+                end_time = timer.end()
+                wait_time = int(np.clip((frame_time - end_time) / 4, 1, frame_time))
+                k = cv2.waitKey(wait_time) & 0xFF
+                if k == ord('q') or k == 27:
+                    quit = True
+                    break
+
+            frame_count += 1
+
+        if quit:
             break
 
-        frame_count += 1
+        n_gts = int(np.sum(n_gt_elements_per_frame))
+        n_tps = int(np.sum(n_detections_per_frame))
+        n_fps = int(np.sum(n_false_positives_per_frame))
+        n_fns = int(np.sum(n_false_negatives_per_frame))
+        precision = n_tps / (n_tps + n_fps)
+        recall = n_tps / (n_tps + n_fns)
+        miss_rate = 1 - recall
+        f1_score = 2 * n_tps / (2 * n_tps + n_fps + n_fns)
 
-    stats[technique] = {
-        'gts': n_gt_elements_per_frame,
-        'dets': n_detections_per_frame,
-        'fps': n_false_positives_per_frame,
-        'fns': n_false_negatives_per_frame,
-        'iou_m': all_mean_ious_per_frame,
-    }
+        stats[technique] = [
+            n_tps,
+            n_fps,
+            n_fns,
+            precision,
+            recall,
+            miss_rate,
+            f1_score,
+            n_gts,
+        ]
+
+        logging.info('Pass finished!')
+
+    if quit:
+        break
+
+    df = pd.DataFrame(
+        stats.values(),
+        columns=[
+            'TP',
+            'FP',
+            'FN',
+            'Precision',
+            'Recall',
+            'Miss Rate',
+            'F1 score',
+            'Ground Truths',
+        ],
+    )
+
+    csv_path = os.path.join(output_folder, f'{video_name}.csv')
+    df.T.astype(object).to_csv(csv_path)
+    logging.info(f'Processing results saved to: {csv_path}')
+
+    del cap
 
 cv2.destroyAllWindows()
-
-for key, data in stats.items():
-    df = pd.DataFrame(data, columns=list(data.keys()))
-    csv_path = os.path.join(args.output, f'{key}.csv')
-    df.to_csv(csv_path)
