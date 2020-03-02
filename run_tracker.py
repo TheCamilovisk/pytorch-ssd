@@ -54,7 +54,7 @@ restrictions = [
     TrajectoryProfileRestriction(
         (0, 0, frame_width, frame_height), (0, frame_height // 2), distance_threshold=20
     ),
-    DetectionDistanceRestriction((2.5, 4.8), (0.5, 1.5)),
+    DetectionDistanceRestriction((2.5, 4.8), (0.5, 2.5)),
 ]
 tracker = WagonTracker(
     detector,
@@ -67,6 +67,8 @@ tracker = WagonTracker(
 timer = Timer()
 
 cv2.namedWindow('annotated', cv2.WINDOW_NORMAL)
+
+distance_colors = [(0, 255, 0), (255, 0, 0)]
 
 while cap.more():
     timer.start()
@@ -84,62 +86,87 @@ while cap.more():
     starting_point, ending_point = restrictions[1].line_points
     xmin, ymin = (int(e) for e in starting_point)
     xmax, ymax = (int(e) for e in ending_point)
-    cv2.line(orig_image, (xmin, ymin), (xmax, ymax), (255, 0, 0), 4)
-
-    # Draw detection boundary
+    cv2.line(orig_image, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
+    # Draw the threshold lines.
     cv2.line(
         orig_image,
-        (frame_width // 2, 0),
-        (frame_width // 2, frame_height),
-        (0, 0, 255),
-        4,
+        (xmin, ymin + restrictions[1].distance_threshold),
+        (xmax, ymax + restrictions[1].distance_threshold),
+        (0, 255, 255),
+        2,
+    )
+    cv2.line(
+        orig_image,
+        (xmin, ymin - restrictions[1].distance_threshold),
+        (xmax, ymax - restrictions[1].distance_threshold),
+        (0, 255, 255),
+        2,
     )
 
+    # # Draw detection boundary
+    # cv2.line(
+    #     orig_image,
+    #     (frame_width // 2, 0),
+    #     (frame_width // 2, frame_height),
+    #     (0, 0, 255),
+    #     4,
+    # )
+
     last_center = None
+    last_height = None
     if len(tracking_info) != 0:
         for id, (box, label) in tracking_info.items():
             label = f"{detector.class_names[label]}: {id}"
             cv2.rectangle(
-                orig_image, (box[0], box[1]), (box[2], box[3]), (255, 255, 0), 4
+                orig_image, (box[0], box[1]), (box[2], box[3]), (255, 255, 0), 2
             )
 
             center = (box[2:] + box[:2]) // 2
+            height = (box[3] - box[1]) // 2
 
-            cv2.putText(
-                orig_image,
-                label,
-                (int(box[0]), int(box[1] - 20)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,  # font scale
-                (255, 0, 255),
-                2,
-            )
+            # cv2.putText(
+            #     orig_image,
+            #     label,
+            #     (int(box[0]), int(box[1] - 20)),
+            #     cv2.FONT_HERSHEY_SIMPLEX,
+            #     1,  # font scale
+            #     (255, 0, 255),
+            #     2,
+            # )
 
             cv2.circle(orig_image, tuple(center), 3, (0, 0, 255), 3)
-            cv2.putText(
-                orig_image,
-                str(center),
-                (int(center[0]), int(center[1] + 30)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,  # font scale
-                (255, 0, 255),
-                2,
-            )
-            if last_center is not None:
-                distance = np.linalg.norm(center - last_center)
-                cv2.line(
-                    orig_image, tuple(center), tuple(last_center), (0, 255, 255), 4
-                )
-                cv2.putText(
-                    orig_image,
-                    str(distance / 349),
-                    (int(center[0]), int(center[1]) - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,  # font scale
-                    (255, 0, 255),
-                    2,
-                )
+            # cv2.putText(
+            #     orig_image,
+            #     str(center),
+            #     (int(center[0]), int(center[1] + 30)),
+            #     cv2.FONT_HERSHEY_SIMPLEX,
+            #     1,  # font scale
+            #     (255, 0, 255),
+            #     2,
+            # )
+            # if last_center is not None:
+            #     distance = np.linalg.norm(center - last_center) / 349
+            #     distance_class = restrictions[2]._classify_length(
+            #         distance
+            #     )
+            #     cv2.line(
+            #         orig_image,
+            #         tuple(center),
+            #         tuple(last_center),
+            #         (distance_colors[distance_class]),
+            #         4,
+            #     )
+                # cv2.putText(
+                #     orig_image,
+                #     str(distance),
+                #     (int(center[0]), int(center[1]) - 20),
+                #     cv2.FONT_HERSHEY_SIMPLEX,
+                #     1,  # font scale
+                #     (255, 0, 255),
+                #     2,
+                # )
             last_center = center
+            last_height = height
 
     cv2.imshow('annotated', orig_image)
 
