@@ -33,6 +33,9 @@ if len(sys.argv) > 5:
     transform = [DistortionRectifier(camera_parameters)]
 else:
     transform = []
+if len(sys.argv) > 6:
+    writer = ImageWriter(video_path, 128, sys.argv[5])
+    writer.start()
 
 if os.path.exists(video_path):
     cap = VideoFileStream(
@@ -47,9 +50,6 @@ cap.start()
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 '''---------------------------------------------------------------'''
-
-writer = ImageWriter(video_path, 128, '/home/camilo/tests')
-writer.start()
 
 
 detector = WagonDetector(net_type, label_path, model_path, prob_threshold=0.4)
@@ -129,7 +129,8 @@ while cap.more():
                 2,
             )
 
-        writer(original_img, boxes, ids)
+        if len(sys.argv) > 6:
+            writer(original_img, boxes, ids)
 
     cv2.imshow('annotated', img_copy)
 
@@ -137,11 +138,12 @@ while cap.more():
     wait_time = int(np.clip((frame_time - end_time) / 4, 1, frame_time))
     k = cv2.waitKey(wait_time) & 0xFF
     if k == ord('q') or k == 27:
-        cap.stop()
-        writer.stop()
+        if len(sys.argv) > 6:
+            cap.stop()
+            writer.stop()
         break
 
-
-cap.stop()
-writer.stop()
+if len(sys.argv) > 6:
+    cap.stop()
+    writer.stop()
 cv2.destroyAllWindows()
