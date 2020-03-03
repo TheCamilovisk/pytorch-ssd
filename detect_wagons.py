@@ -1,5 +1,6 @@
 import os
 import sys
+from argparse import ArgumentParser
 
 import cv2
 import numpy as np
@@ -17,21 +18,60 @@ from wagon_tracking.transforms import DistortionRectifier
 from wagon_tracking.utils import get_realpath
 from wagon_tracking.videostream import VideoFileStream, VideoLiveStream
 
-if len(sys.argv) < 5:
-    print(
-        'Usage: python run_ssd_example.py <net type>  <model path> <label path>'
-        '<video file | device location> [camera_param_file]'
-    )
-    sys.exit(0)
-net_type = sys.argv[1]
-model_path = sys.argv[2]
-label_path = sys.argv[3]
-video_path = sys.argv[4]
-if len(sys.argv) > 5:
-    camera_parameters = get_realpath(sys.argv[5])
+parser = ArgumentParser()
+parser.add_argument(
+    '--net-type',
+    type=str,
+    required=True,
+    help='The type od the detector network. Actually, the only'
+    ' model considered is "mb1-ssd".',
+)
+parser.add_argument(
+    '--model-path',
+    type=str,
+    required=True,
+    help='The path to the model definition file. The'
+    ' "mb1-ssd" can be downloaded at https://storage.googleapis.com/models-thecamilowisk/mobilenet_v6.pth',
+)
+parser.add_argument(
+    '--label-path',
+    type=str,
+    default='resources/labels.txt',
+    help='Path to the labels definitions file.',
+)
+parser.add_argument(
+    '--video-path',
+    type=str,
+    required=False,
+    help='The video to be analyzed. It can be a file path or a'
+    ' webcam IP address. If not supplied, the script will try to access the onboard webcam, if present.',
+)
+parser.add_argument(
+    '--camera-parameters',
+    type=str,
+    required=False,
+    help='Path to the camera calibration parameters.',
+)
+parser.add_argument(
+    '--images-folder',
+    type=str,
+    required=False,
+    help='Path of the folder where the wagons images will be stored.',
+)
+args = parser.parse_args()
+
+net_type = args.net_type
+model_path = args.model_path
+label_path = args.label_path
+video_path = args.video_path
+if args.camera_parameters is not None:
+    camera_parameters = get_realpath(args.camera_parameters)
     transform = [DistortionRectifier(camera_parameters)]
 else:
     transform = []
+if args.images_folder is not None:
+    writer = ImageWriter(video_path, 128, args.images_folder)
+    writer.start()
 
 if os.path.exists(video_path):
     cap = VideoFileStream(
@@ -118,15 +158,19 @@ while cap.more():
                 2,
             )
 
+        if args.images_folder is not None:
+            writer(original_img, boxes, ids)
+
     cv2.imshow('annotated', img_copy)
 
     end_time = timer.end() * 1e3
     wait_time = int(np.clip((frame_time - end_time) / 4, 1, frame_time))
     k = cv2.waitKey(wait_time) & 0xFF
     if k == ord('q') or k == 27:
-        cap.stop()
         break
 
+if args.images_folder is not None:
+    writer.stop()
 
 cap.stop()
 cv2.destroyAllWindows()
