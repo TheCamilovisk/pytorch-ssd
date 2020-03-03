@@ -8,7 +8,6 @@ import numpy as np
 from vision.utils import Timer
 from vision.utils import box_utils_numpy as box_utils
 from wagon_tracking.detection import WagonDetector
-from wagon_tracking.imagewriter import ImageWriter
 from wagon_tracking.restrictions import (
     DetectionDistanceRestriction,
     ROIRestriction,
@@ -88,14 +87,13 @@ frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 '''---------------------------------------------------------------'''
 
-
 detector = WagonDetector(net_type, label_path, model_path, prob_threshold=0.4)
 restrictions = [
     ROIRestriction((302, 273, 1579, 796)),
     TrajectoryProfileRestriction(
         (0, 0, frame_width, frame_height), (0, frame_height // 2), distance_threshold=20
     ),
-    DetectionDistanceRestriction((2.5, 4.8), (0.5, 1.5)),
+    DetectionDistanceRestriction((2.5, 5.0), (0.5, 1.5)),
 ]
 tracker = WagonTracker(
     detector,
@@ -104,7 +102,7 @@ tracker = WagonTracker(
     video_fps=cap.get(cv2.CAP_PROP_FPS),
     target_fps=30.0,
 )
-wagoninfo = WagonsInfo((302, 273, 1579, 796), (2.5, 4.8), (0.5, 1.5))
+wagoninfo = WagonsInfo((302, 273, 1579, 796), (2.5, 5.0), (0.5, 1.5))
 
 timer = Timer()
 
@@ -140,16 +138,10 @@ while cap.more():
         4,
     )
 
-    boxes = []
-    ids = []
-
     if len(wagons) != 0:
         for id, box in wagons.items():
             if box_utils.area_of(box[:2], box[2:]) == 0:
                 continue
-
-            boxes.append(box)
-            ids.append(id)
 
             tl, br = tuple(box[:2].astype(np.int)), tuple(box[2:].astype(np.int))
             cv2.rectangle(img_copy, tl, br, (255, 255, 0), 4)
@@ -166,7 +158,7 @@ while cap.more():
                 2,
             )
 
-        if len(sys.argv) > 6:
+        if args.images_folder is not None:
             writer(original_img, boxes, ids)
 
     cv2.imshow('annotated', img_copy)
@@ -175,12 +167,10 @@ while cap.more():
     wait_time = int(np.clip((frame_time - end_time) / 4, 1, frame_time))
     k = cv2.waitKey(wait_time) & 0xFF
     if k == ord('q') or k == 27:
-        if len(sys.argv) > 6:
-            cap.stop()
-            writer.stop()
         break
 
-if len(sys.argv) > 6:
-    cap.stop()
+if args.images_folder is not None:
     writer.stop()
+
+cap.stop()
 cv2.destroyAllWindows()
