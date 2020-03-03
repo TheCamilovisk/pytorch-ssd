@@ -63,3 +63,13 @@ Re-train the net.
 ```
 python train_detector.py --datasets <train dataset> --validation_dataset <validation_dataset> --net <net_type> --pretrained_ssd <pretrained_model_file>  --batch_size 24 --num_epochs 200 --scheduler cosine --lr 0.01 --base_net_lr 0.001 --t_max 200
 ```
+
+## Run the super-structure tracking
+
+Type:
+
+```
+python detect_wagons.py -h
+```
+
+OBS: Please, note that the "video_path" option can acces either a video filepath or a webcam IP address.
