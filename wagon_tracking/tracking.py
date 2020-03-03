@@ -118,6 +118,7 @@ class Tracker:
 
         self._update_tracking(boxes, labels)
 
+        self.elements_info = SortedDict(self.elements_info)
         return deepcopy(self.elements_info)
 
     def _sort_detections(self, boxes, labels):
@@ -313,154 +314,102 @@ class WagonTracker(Tracker):
         return elements_info
 
 
-class PureDetectionTracker(Tracker):
-    def __init__(self, detector):
-        super().__init__(detector)
+class WagonsInfo:
+    def __init__(
+        self, roi, intrawagon_range, interwagon_range, wagon_threshold=None, label=None
+    ):
+        roi = np.array(roi)
+        xmin, ymin = roi[0::2].min(), roi[1::2].min()
+        xmax, ymax = roi[0::2].max(), roi[1::2].max()
+        self.roi = np.array([xmin, ymin, xmax, ymax])
 
-    def __call__(self, image):
-        return super().__call__(image)
+        self.intrawagon_range = tuple(np.sort(intrawagon_range))
+        self.interwagon_range = tuple(np.sort(interwagon_range))
+        self.label = label
 
-    def _update_tracking(self, boxes, labels):
-        updated_elements_info, remaining_elements_info = self._update_elements(
-            boxes, labels
-        )
+        self.wagon_thresh = wagon_threshold
+        if self.wagon_thresh is None:
+            self.wagon_thresh = (xmin + xmax) / 2
 
-        new_elements_info = self._get_new_elements_info(
-            remaining_elements_info, updated_elements_info
-        )
+    def __call__(self, tracking_info):
+        if not isinstance(tracking_info, SortedDict):
+            raise TypeError
 
-        if len(new_elements_info) > 0:
-            updated_elements_info.update(new_elements_info)
+        if not tracking_info:
+            return {}
 
-        self.elements_info = updated_elements_info
+        boxes = self._get_elements_boxes(tracking_info)
 
-    def _update_elements(self, boxes, labels):
-        updated_elements_info = {}
+        centers = (boxes[:, :2] + boxes[:, 2:]) / 2
+        heigths = boxes[:, 3] - boxes[:, 1]
 
-        for t_id, (t_box, t_lbl) in self.elements_info.items():
-            if len(boxes) == 0:
-                break
+        last_box = None
+        last_center = None
+        last_heigth = None
 
-            search_mask = labels == t_lbl
-            if search_mask.sum() == 0:
+        wagons = {}
+        next_id = 0
+
+        for box, center, heigth in zip(boxes, centers, heigths):
+            if last_center is None:
+                if center[0] > self.wagon_thresh:
+                    start_point = np.array((self.roi[0], box[1]))
+                    wagon_box = self._clip(np.hstack((start_point, box[2:])))
+                else:
+                    end_point = np.array((self.roi[2], box[3]))
+                    wagon_box = self._clip(np.hstack((box[:2], end_point)))
+
+                wagons[next_id] = wagon_box
+                last_box = box
+                last_center = center
+                last_heigth = heigth
                 continue
 
-            search_boxes = boxes[search_mask, :]
-            search_labels = labels[search_mask]
-            search_idxs = np.arange(len(boxes))[search_mask]
+            mean_heigth = (heigth + last_heigth) / 2
+            length = np.linalg.norm(center - last_center) / mean_heigth
+            length_class = self._classify_length(length, mean_heigth)
 
-            ious = box_utils.iou_of(t_box, search_boxes)
-            n_box_idx = np.argmax(ious)
-
-            if ious[n_box_idx] > 0.1:
-                updated_elements_info[t_id] = (
-                    search_boxes[n_box_idx],
-                    search_labels[n_box_idx],
-                )
-
-                boxes = np.delete(boxes, (search_idxs[n_box_idx]), axis=0)
-                labels = np.delete(labels, (search_idxs[n_box_idx]), axis=0)
-
-        return updated_elements_info, (boxes, labels)
-
-
-class DetectionAndTrackingTracker(Tracker):
-    OPENCV_OBJECT_TRACKERS = {
-        "csrt": cv.TrackerCSRT_create,
-        "kcf": cv.TrackerKCF_create,
-        "boosting": cv.TrackerBoosting_create,
-        "mil": cv.TrackerMIL_create,
-        "tld": cv.TrackerTLD_create,
-        "medianflow": cv.TrackerMedianFlow_create,
-        "mosse": cv.TrackerMOSSE_create,
-    }
-
-    def __init__(self, detector, tracker_type, update_interval):
-        super().__init__(detector)
-
-        self.tracker_type = tracker_type.lower()
-        self.trackers = {}
-        self.frame_count = 0
-        self.update_interval = update_interval
-
-    def __call__(self, image):
-        if self.frame_count % self.update_interval == 0:
-            boxes, labels, _ = self.detector(image)
-            boxes, labels = boxes.numpy(), labels.numpy()
-
-            if len(boxes) != 0:
-                boxes, labels = self._sort_detections(boxes, labels)
-
-            updated_elements_info, remaining_elements_info = self._update_elements(
-                boxes, labels
-            )
-
-            new_elements_info = self._get_new_elements_info(
-                remaining_elements_info, updated_elements_info
-            )
-            updated_elements_info.update(new_elements_info)
-
-            new_trackers = {}
-            for key, (box, label) in updated_elements_info.items():
-                box = box.copy()
-                box[2:] = box[2:] - box[:2]
-
-                tracker = self.OPENCV_OBJECT_TRACKERS[self.tracker_type]()
-                tracker.init(image, tuple(box.astype(np.int)))
-                new_trackers[key] = (tracker, label)
-
-            self.trackers = new_trackers
-
-        else:
-            updated_elements_info = self._update_trackers(image)
-
-        self.elements_info = SortedDict(updated_elements_info)
-
-        self.frame_count += 1
-
-        return deepcopy(self.elements_info)
-
-    def _update_elements(self, boxes, labels):
-        updated_elements_info = {}
-
-        for t_id, (t_box, t_lbl) in self.elements_info.items():
-            if len(boxes) == 0:
-                break
-
-            search_mask = labels == t_lbl
-            if search_mask.sum() == 0:
+            if length_class is None:
                 continue
 
-            search_boxes = boxes[search_mask, :]
-            search_labels = labels[search_mask]
-            search_idxs = np.arange(len(boxes))[search_mask]
+            if length_class == 0:
+                wagon_box = self._clip(np.hstack((last_box[:2], box[2:])))
+                wagons[next_id] = wagon_box
+                next_id += 1
 
-            ious = box_utils.iou_of(t_box, search_boxes)
-            n_box_idx = np.argmax(ious)
-
-            if ious[n_box_idx] > 0.1:
-                updated_elements_info[t_id] = (
-                    search_boxes[n_box_idx],
-                    search_labels[n_box_idx],
-                )
-
-                boxes = np.delete(boxes, (search_idxs[n_box_idx]), axis=0)
-                labels = np.delete(labels, (search_idxs[n_box_idx]), axis=0)
-
-        return updated_elements_info, (boxes, labels)
-
-    def _update_trackers(self, image):
-        updated_elements_info = {}
-
-        for key, (tracker, label) in self.trackers.items():
-            (success, box) = tracker.update(image)
-
-            if success:
-                box = np.array(box)
-                box[2:] = box[2:] + box[:2]
-
-                updated_elements_info[key] = (box, label)
             else:
-                print('AKI')
+                end_point = np.array((self.roi[2], box[3]))
+                wagon_box = self._clip(np.hstack((box[:2], end_point)))
+                wagons[next_id] = wagon_box
 
-        return updated_elements_info
+            last_box = box
+            last_center = center
+            last_heigth = heigth
+
+        return wagons
+
+    def _get_elements_boxes(self, tracking_info):
+        if self.label is not None:
+            boxes = (
+                box for box, lbl in tuple(tracking_info.values()) if lbl == self.label
+            )
+            boxes = np.array(tuple(boxes))
+        else:
+            boxes = (box for box, _ in tuple(tracking_info.values()))
+            boxes = np.array(tuple(boxes))
+
+        return boxes
+
+    def _classify_length(self, length, mean_heigth):
+        if self.intrawagon_range[0] <= length <= self.intrawagon_range[1]:
+            return 0
+        elif self.interwagon_range[0] <= length <= self.interwagon_range[1]:
+            return 1
+        else:
+            return None
+
+    def _clip(self, box):
+        box = box.copy()
+        box[0::2] = np.clip(box[0::2], self.roi[0], self.roi[2])
+        box[1::2] = np.clip(box[1::2], self.roi[1], self.roi[3])
+        return box
