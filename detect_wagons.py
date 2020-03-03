@@ -8,6 +8,7 @@ import numpy as np
 from vision.utils import Timer
 from vision.utils import box_utils_numpy as box_utils
 from wagon_tracking.detection import WagonDetector
+from wagon_tracking.imagewriter import ImageWriter
 from wagon_tracking.restrictions import (
     DetectionDistanceRestriction,
     ROIRestriction,
@@ -138,10 +139,16 @@ while cap.more():
         4,
     )
 
+    boxes = []
+    ids = []
+
     if len(wagons) != 0:
         for id, box in wagons.items():
             if box_utils.area_of(box[:2], box[2:]) == 0:
                 continue
+
+            boxes.append(box)	
+            ids.append(id)
 
             tl, br = tuple(box[:2].astype(np.int)), tuple(box[2:].astype(np.int))
             cv2.rectangle(img_copy, tl, br, (255, 255, 0), 4)
