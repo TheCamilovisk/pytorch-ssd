@@ -1,5 +1,4 @@
 import os
-import sys
 from argparse import ArgumentParser
 
 import cv2
