@@ -131,7 +131,7 @@ def compute_metrics(dataset_folder, dataset_file, detector, class_dict, iou_thre
     recall = true_positives / len(gt_boxes)
     ap = measurements.compute_voc2007_average_precision(precision, recall)
     false_negatives = len(gt_boxes) - true_positives[-1]
-    f1score = (precision[-1] * recall[-1]) / (precision[-1] + recall[-1])
+    f1score = 2 * (precision[-1] * recall[-1]) / (precision[-1] + recall[-1])
 
     return (
         true_positives[-1],
